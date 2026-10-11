@@ -60,7 +60,10 @@ local TI = {
 	Spin     = TweenInfo.new(0.85, Enum.EasingStyle.Linear, INOUT, -1),
 	Sweep    = TweenInfo.new(2.4, SINE, INOUT, -1, false, 0.6),
 	Shine    = TweenInfo.new(1.5, SINE, INOUT, -1, false, 0.4),
+	ShineOne = TweenInfo.new(0.65, SINE, INOUT),
+	Pulse    = TweenInfo.new(0.6, SINE, INOUT, -1, true),
 	PopupIn  = TweenInfo.new(0.2, QUINT, OUT),
+	Page     = TweenInfo.new(0.32, QUINT, OUT),
 }
 
 local function create(class, props, children)
@@ -177,7 +180,7 @@ local function hline(parent, props)
 	return create("Frame", base)
 end
 
-local function shineOverlay(parent)
+local function shineOverlay(parent, radius, strength)
 	local overlay = create("Frame", {
 		Parent = parent,
 		Size = UDim2.fromScale(1, 1),
@@ -186,14 +189,19 @@ local function shineOverlay(parent)
 		Visible = false,
 		ZIndex = 2,
 	})
-	round(overlay)
+	if radius then
+		corner(overlay, radius)
+	else
+		round(overlay)
+	end
+	local peak = strength or 0.55
 	local grad = create("UIGradient", {
 		Parent = overlay,
 		Offset = Vector2.new(-1, 0),
 		Transparency = NumberSequence.new({
 			NumberSequenceKeypoint.new(0.00, 1),
 			NumberSequenceKeypoint.new(0.44, 1),
-			NumberSequenceKeypoint.new(0.50, 0.55),
+			NumberSequenceKeypoint.new(0.50, peak),
 			NumberSequenceKeypoint.new(0.56, 1),
 			NumberSequenceKeypoint.new(1.00, 1),
 		}),
@@ -215,6 +223,22 @@ local function shineOverlay(parent)
 			running = nil
 		end
 		overlay.Visible = false
+	end
+	function api.once()
+		if running then
+			running:Cancel()
+		end
+		overlay.Visible = true
+		grad.Offset = Vector2.new(-1, 0)
+		local t = TweenService:Create(grad, TI.ShineOne, { Offset = Vector2.new(1, 0) })
+		running = t
+		t.Completed:Once(function(state)
+			if state == Enum.PlaybackState.Completed and running == t then
+				running = nil
+				overlay.Visible = false
+			end
+		end)
+		t:Play()
 	end
 	return api
 end
@@ -420,6 +444,23 @@ function Window:_toLocal(abs)
 	return (abs - self.root.AbsolutePosition) / self:_s()
 end
 
+function Window:_contentWidth()
+	return self.W - (self.Layout == "Sidebar" and SIDEBAR_W or 0)
+end
+
+function Window:_innerWidth()
+	return self:_contentWidth() - PAD * 2
+end
+
+function Window:_scaleOf(gui, localSize, axis)
+	if localSize <= 0 then
+		return 1
+	end
+	local abs = axis == "Y" and gui.AbsoluteSize.Y or gui.AbsoluteSize.X
+	local s = abs / localSize
+	return s > 0 and s or 1
+end
+
 function Window:_bgAt(y)
 	return C.PanelTop:Lerp(C.Panel, math.clamp(y / math.max(self.H, 1), 0, 1))
 end
@@ -561,7 +602,7 @@ function Window:_showPopup(holder, final, owner, onClose)
 end
 
 function Window:_columnsFor(tab)
-	local cw = self.W - (self.Layout == "Sidebar" and SIDEBAR_W or 0) - PAD * 2 - 4
+	local cw = self:_innerWidth()
 	return math.clamp(math.floor((cw + GAP) / (MIN_COL + GAP)), 1, tab.Columns)
 end
 
@@ -596,14 +637,15 @@ function Window:_moveIndicator(instant)
 	if not tab then
 		return
 	end
-	local s = self:_s()
 	if side then
+		local s = self:_scaleOf(self.sidebar, SIDEBAR_W)
 		local y = 8 + (tab.Index - 1) * (TAB_H + TAB_GAP)
 		local pos = UDim2.new(0, 8, 0, y)
 		if instant then
 			self.sideIndicator.Position = pos
 		else
 			tween(self.sideIndicator, TI.Snap, { Position = pos })
+			self.indicatorShine.once()
 		end
 		local sc = self.sideScroll
 		local view = sc.AbsoluteWindowSize.Y / s
@@ -620,12 +662,13 @@ function Window:_moveIndicator(instant)
 			tween(sc, TI.Snap, { CanvasPosition = Vector2.new(0, target) })
 		end
 	else
+		local s = self:_scaleOf(self.topbar, TOPBAR_H, "Y")
 		local x = 0
 		for i = 1, tab.Index - 1 do
 			x = x + self.Tabs[i].width + TAB_GAP
 		end
 		local props = {
-			Position = UDim2.new(0, x + 14, 1, 0),
+			Position = UDim2.new(0, x + 14, 0, TOPBAR_H),
 			Size = UDim2.new(0, math.max(tab.width - 28, 8), 0, 2),
 		}
 		if instant then
@@ -655,20 +698,32 @@ function Window:_updateFades()
 	if self.destroyed then
 		return
 	end
-	local s = self:_s()
+	local ss = self:_scaleOf(self.sidebar, SIDEBAR_W)
 	local sc = self.sideScroll
-	local canvas = sc.AbsoluteCanvasSize.Y / s
-	local view = sc.AbsoluteWindowSize.Y / s
+	local canvas = sc.CanvasSize.Y.Offset
+	local view = sc.AbsoluteWindowSize.Y / ss
 	local pos = sc.CanvasPosition.Y
 	self.sideFadeTop.Visible = pos > 2
 	self.sideFadeBottom.Visible = pos + view < canvas - 2
 
+	local ts = self:_scaleOf(self.topbar, TOPBAR_H, "Y")
 	local tc = self.topScroll
-	local tcanvas = tc.AbsoluteCanvasSize.X / s
-	local tview = tc.AbsoluteWindowSize.X / s
+	local tcanvas = tc.CanvasSize.X.Offset
+	local tview = tc.AbsoluteWindowSize.X / ts
 	local tpos = tc.CanvasPosition.X
 	self.topFadeLeft.Visible = tpos > 2
 	self.topFadeRight.Visible = tpos + tview < tcanvas - 2
+end
+
+function Window:_syncNavCanvas()
+	if self.destroyed then
+		return
+	end
+	local ss = self:_scaleOf(self.sidebar, SIDEBAR_W)
+	self.sideScroll.CanvasSize = UDim2.fromOffset(0, math.ceil(self.sideList.AbsoluteSize.Y / ss) + 16)
+	local ts = self:_scaleOf(self.topbar, TOPBAR_H, "Y")
+	self.topScroll.CanvasSize = UDim2.fromOffset(math.ceil(self.topList.AbsoluteSize.X / ts), 0)
+	self:_updateFades()
 end
 
 function Window:_layoutHeader()
@@ -701,14 +756,18 @@ function Window:_applyLayout()
 	paint(self.topFadeLeft:FindFirstChildOfClass("UIGradient"), HEADER_H + TOPBAR_H / 2)
 	paint(self.topFadeRight:FindFirstChildOfClass("UIGradient"), HEADER_H + TOPBAR_H / 2)
 
+	local inner = self:_innerWidth()
 	for i = 1, #self.Tabs do
 		local tab = self.Tabs[i]
 		self:_placeTab(tab)
-		tab:_reflow(self:_columnsFor(tab))
+		tab:_reflow(self:_columnsFor(tab), inner)
 	end
 	self:_moveIndicator(true)
 	task.defer(function()
-		self:_updateFades()
+		self:_syncNavCanvas()
+		for i = 1, #self.Tabs do
+			self.Tabs[i].syncCanvas()
+		end
 	end)
 end
 
@@ -765,7 +824,7 @@ end
 
 function Window:_updateStatus()
 	local key = self.MenuKey
-	self.statusRight.Text = (key and key.Name or "None") .. "  to toggle"
+	self.statusRight.Text = (key and key.Name or "None") .. " to toggle"
 end
 
 function Window:SetLayout(layout)
@@ -817,10 +876,38 @@ function Window:SelectTab(tab)
 	if prev then
 		prev.page.Visible = false
 		self:_styleTab(prev, false)
+		tween(prev.button, TI.Hover, { BackgroundTransparency = 1 })
 	end
+	tab.button.BackgroundTransparency = 1
 	tab.page.Visible = true
 	self:_styleTab(tab, true, prev == nil)
 	self:_moveIndicator(prev == nil)
+
+	self._pageToken = self._pageToken + 1
+	local token = self._pageToken
+	for i = 1, #self.Tabs do
+		local t = self.Tabs[i]
+		if t ~= tab and t.page.Parent == self.pageFader then
+			t.page.Parent = self.content
+		end
+	end
+	if not prev then
+		return
+	end
+	tab.page.Parent = self.pageFader
+	self.pageFader.Visible = true
+	self.pageFader.GroupTransparency = 1
+	self.pageFader.Position = UDim2.fromOffset(0, 8)
+	tween(self.pageFader, TI.Page, {
+		GroupTransparency = 0,
+		Position = UDim2.fromOffset(0, 0),
+	}).Completed:Once(function()
+		if token ~= self._pageToken or self.destroyed then
+			return
+		end
+		tab.page.Parent = self.content
+		self.pageFader.Visible = false
+	end)
 end
 
 function Window:Toggle(state)
@@ -1148,12 +1235,14 @@ function Window:AddTab(opts)
 
 	local btn = create("TextButton", {
 		Name = tab.Name,
+		BackgroundColor3 = C.Stroke,
 		BackgroundTransparency = 1,
 		AutoButtonColor = false,
 		BorderSizePixel = 0,
 		Text = "",
 		LayoutOrder = tab.Index,
 	})
+	corner(btn, 7)
 	tab.button = btn
 
 	tab.icon = create("ImageLabel", {
@@ -1186,20 +1275,28 @@ function Window:AddTab(opts)
 		ScrollBarThickness = 3,
 		ScrollBarImageColor3 = C.Stroke,
 		ScrollBarImageTransparency = 0.2,
-		VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
+		VerticalScrollBarInset = Enum.ScrollBarInset.None,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = AUTO_Y,
 	})
-	padding(tab.page, PAD, PAD, PAD, PAD)
 
 	tab.holder = create("Frame", {
 		Parent = tab.page,
-		Size = UDim2.new(1, 0, 0, 0),
+		Position = UDim2.fromOffset(PAD, PAD),
+		Size = UDim2.fromOffset(self:_innerWidth(), 0),
 		AutomaticSize = AUTO_Y,
 		BackgroundTransparency = 1,
 	})
 	hlist(tab.holder, GAP)
+
+	function tab.syncCanvas()
+		if self.destroyed then
+			return
+		end
+		local s = self:_scaleOf(self.content, self:_contentWidth())
+		tab.page.CanvasSize = UDim2.fromOffset(0, math.ceil(tab.holder.AbsoluteSize.Y / s) + PAD * 2)
+	end
+	self:_track(tab.holder:GetPropertyChangedSignal("AbsoluteSize"):Connect(tab.syncCanvas))
 
 	self:_track(tab.page:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 		if self._popup then
@@ -1214,6 +1311,9 @@ function Window:AddTab(opts)
 	self:_track(btn.MouseEnter:Connect(function()
 		if tab ~= self.ActiveTab then
 			tween(tab.label, TI.Hover, { TextColor3 = C.Text })
+			if self.Layout == "Sidebar" then
+				tween(btn, TI.Hover, { BackgroundTransparency = 0.88 })
+			end
 		end
 	end))
 
@@ -1221,11 +1321,12 @@ function Window:AddTab(opts)
 		if tab ~= self.ActiveTab then
 			tween(tab.label, TI.Hover, { TextColor3 = C.Muted })
 		end
+		tween(btn, TI.Hover, { BackgroundTransparency = 1 })
 	end))
 
 	self.Tabs[tab.Index] = tab
 	self:_placeTab(tab)
-	tab:_reflow(self:_columnsFor(tab))
+	tab:_reflow(self:_columnsFor(tab), self:_innerWidth())
 
 	if not self.ActiveTab then
 		self:SelectTab(tab)
@@ -1233,16 +1334,18 @@ function Window:AddTab(opts)
 		self:_styleTab(tab, false, true)
 	end
 	task.defer(function()
-		self:_updateFades()
+		self:_syncNavCanvas()
+		tab.syncCanvas()
 	end)
 
 	return tab
 end
 
-function Tab:_reflow(n)
-	if n == self._cols then
-		return
-	end
+function Tab:_reflow(n, width)
+	width = math.max(math.floor(width), 1)
+	local colW = math.floor((width - GAP * (n - 1)) / n)
+	self.holder.Size = UDim2.fromOffset(width, 0)
+	local changed = n ~= self._cols
 	self._cols = n
 	for i = 1, math.max(n, #self.columns) do
 		local col = self.columns[i]
@@ -1257,16 +1360,18 @@ function Tab:_reflow(n)
 				vlist(col, GAP)
 				self.columns[i] = col
 			end
-			col.Size = UDim2.new(1 / n, -GAP * (n - 1) / n, 0, 0)
+			col.Size = UDim2.fromOffset(colW, 0)
 			col.Visible = true
 		elseif col then
 			col.Visible = false
 		end
 	end
-	for k = 1, #self.Sections do
-		local sec = self.Sections[k]
-		sec.frame.Parent = self.columns[((sec.Column - 1) % n) + 1]
-		sec.frame.LayoutOrder = k
+	if changed then
+		for k = 1, #self.Sections do
+			local sec = self.Sections[k]
+			sec.frame.Parent = self.columns[((sec.Column - 1) % n) + 1]
+			sec.frame.LayoutOrder = k
+		end
 	end
 end
 
@@ -1299,9 +1404,15 @@ function Tab:AddSection(opts)
 		LayoutOrder = k,
 	})
 	corner(sec.frame, 8)
-	stroke(sec.frame, C.Stroke, 1, LINE_T)
+	local secStroke = stroke(sec.frame, C.Stroke, 1, LINE_T)
 	padding(sec.frame, 12, 14, 14, 14)
 	vlist(sec.frame, 9)
+	w:_track(sec.frame.MouseEnter:Connect(function()
+		tween(secStroke, TI.Hover, { Transparency = 0.15 })
+	end))
+	w:_track(sec.frame.MouseLeave:Connect(function()
+		tween(secStroke, TI.Hover, { Transparency = LINE_T })
+	end))
 
 	local head = create("Frame", {
 		Parent = sec.frame,
@@ -1423,6 +1534,7 @@ function Section:AddButton(opts)
 		bs = stroke(btn, C.Stroke)
 	end
 	local sc = create("UIScale", { Parent = btn })
+	local clickShine = style == "Primary" and shineOverlay(btn, 7, 0.6) or nil
 
 	local hovering = false
 
@@ -1449,6 +1561,18 @@ function Section:AddButton(opts)
 	w:_track(btn.Activated:Connect(function()
 		sc.Scale = 1
 		tween(sc, TI.Press, { Scale = 0.97 })
+		if clickShine then
+			clickShine.once()
+		elseif style == "Danger" then
+			tween(bs, TI.FlashIn, { Transparency = 0 }).Completed:Once(function(state)
+				if state == Enum.PlaybackState.Completed then
+					tween(bs, TI.FlashOut, { Transparency = 0.55 })
+				end
+			end)
+		else
+			bs.Color = C.OnAccent
+			tween(bs, TI.FlashOut, { Color = hovering and w.Accent or C.Stroke })
+		end
 		if opts.Callback then
 			task.spawn(opts.Callback)
 		end
@@ -1495,6 +1619,7 @@ function Section:AddToggle(opts)
 		BorderSizePixel = 0,
 	})
 	round(knob)
+	local glow = w:_accent(stroke(pill, w.Accent, 2, 1), "Color")
 
 	local function render(instant)
 		local on = obj.Value
@@ -1522,6 +1647,13 @@ function Section:AddToggle(opts)
 
 	w:_track(hit.Activated:Connect(function()
 		obj:Set(not obj.Value)
+		if obj.Value then
+			tween(glow, TI.FlashIn, { Transparency = 0.45 }).Completed:Once(function(state)
+				if state == Enum.PlaybackState.Completed then
+					tween(glow, TI.FlashOut, { Transparency = 1 })
+				end
+			end)
+		end
 	end))
 
 	w:_hook(function()
@@ -1614,6 +1746,7 @@ function Section:AddSlider(opts)
 		ZIndex = 3,
 	}), "BackgroundColor3")
 	round(knob)
+	local knobGlow = w:_accent(stroke(knob, w.Accent, 4, 1), "Color")
 
 	local hit = create("TextButton", {
 		Parent = row,
@@ -1673,6 +1806,7 @@ function Section:AddSlider(opts)
 		local page = self.Tab.page
 		page.ScrollingEnabled = false
 		shine.start()
+		tween(knobGlow, TI.Hover, { Transparency = 0.65 })
 		tween(valueLabel, TI.Hover, { TextColor3 = C.Text })
 		fromX(input.Position.X, false)
 		w:_beginDrag(function(pos)
@@ -1680,6 +1814,7 @@ function Section:AddSlider(opts)
 		end, function()
 			page.ScrollingEnabled = true
 			shine.stop()
+			tween(knobGlow, TI.FlashOut, { Transparency = 1 })
 			tween(valueLabel, TI.Hover, { TextColor3 = C.Muted })
 			valueScale.Scale = 1
 			tween(valueScale, TI.Pop, { Scale = 1.12 })
@@ -1872,17 +2007,22 @@ function Section:AddDropdown(opts)
 		local scroll = create("ScrollingFrame", {
 			Parent = panel,
 			Position = UDim2.fromOffset(0, top),
-			Size = UDim2.new(1, 0, 0, shown * itemH),
+			Size = UDim2.fromOffset(width, shown * itemH),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			ScrollBarThickness = 2,
 			ScrollBarImageColor3 = C.Stroke,
 			ScrollingDirection = Enum.ScrollingDirection.Y,
-			CanvasSize = UDim2.new(),
-			AutomaticCanvasSize = AUTO_Y,
+			CanvasSize = UDim2.fromOffset(0, math.max(#options, 1) * itemH),
 		})
-		padding(scroll, 0, 0, 5, 5)
-		vlist(scroll, 0)
+		local itemList = create("Frame", {
+			Parent = scroll,
+			Position = UDim2.fromOffset(5, 0),
+			Size = UDim2.fromOffset(width - 10, 0),
+			AutomaticSize = AUTO_Y,
+			BackgroundTransparency = 1,
+		})
+		vlist(itemList, 0)
 
 		local items = {}
 		local function style(it)
@@ -1902,7 +2042,7 @@ function Section:AddDropdown(opts)
 
 		if #options == 0 then
 			text({
-				Parent = scroll,
+				Parent = itemList,
 				Size = UDim2.new(1, 0, 0, itemH),
 				Text = "  No options",
 				TextColor3 = C.Faint,
@@ -1914,7 +2054,7 @@ function Section:AddDropdown(opts)
 			local option = options[i]
 			local it = { option = option, hover = false }
 			it.btn = create("TextButton", {
-				Parent = scroll,
+				Parent = itemList,
 				LayoutOrder = i,
 				Size = UDim2.new(1, 0, 0, itemH),
 				BackgroundTransparency = 1,
@@ -1976,10 +2116,17 @@ function Section:AddDropdown(opts)
 		if searchBox then
 			searchBox:GetPropertyChangedSignal("Text"):Connect(function()
 				local q = string.lower(searchBox.Text)
+				local count = 0
 				for i = 1, #items do
 					local it = items[i]
-					it.btn.Visible = q == "" or string.find(string.lower(tostring(it.option)), q, 1, true) ~= nil
+					local match = q == "" or string.find(string.lower(tostring(it.option)), q, 1, true) ~= nil
+					it.btn.Visible = match
+					if match then
+						count = count + 1
+					end
 				end
+				scroll.CanvasSize = UDim2.fromOffset(0, math.max(count, 1) * itemH)
+				scroll.CanvasPosition = Vector2.new(0, 0)
 			end)
 		end
 
@@ -2074,10 +2221,15 @@ function Section:AddKeybind(opts)
 			return
 		end
 		show("...", C.Text)
-		tween(chipStroke, TI.Hover, { Color = w.Accent })
+		chipStroke.Color = w.Accent
+		chipStroke.Transparency = 0
+		local pulse = TweenService:Create(chipStroke, TI.Pulse, { Transparency = 0.75 })
+		pulse:Play()
 		Library._listenerChip = chip
 		Library._listener = function(input)
 			Library._listenerChip = nil
+			pulse:Cancel()
+			chipStroke.Transparency = 0
 			tween(chipStroke, TI.Hover, { Color = C.Stroke })
 			if input.UserInputType ~= Enum.UserInputType.Keyboard then
 				obj:Set(obj.Value, true)
@@ -2686,6 +2838,7 @@ function Library:CreateWindow(opts)
 	self._notifList = {}
 	self._notifOrder = 0
 	self._token = 0
+	self._pageToken = 0
 	self._busy = false
 
 	local gui = create("ScreenGui", {
@@ -2887,19 +3040,19 @@ function Library:CreateWindow(opts)
 		ScrollBarImageTransparency = 0.3,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = AUTO_Y,
 	})
 
 	self.sideIndicator = self:_accent(create("Frame", {
 		Parent = self.sideScroll,
 		Position = UDim2.fromOffset(8, 8),
-		Size = UDim2.new(1, -16, 0, TAB_H),
+		Size = UDim2.fromOffset(SIDEBAR_W - 17, TAB_H),
 		BackgroundTransparency = SOFT_T,
 		BorderSizePixel = 0,
 		Visible = false,
 		ZIndex = 1,
 	}), "BackgroundColor3")
 	corner(self.sideIndicator, 7)
+	self.indicatorShine = shineOverlay(self.sideIndicator, 7, 0.82)
 	self:_accent(create("Frame", {
 		Parent = self.sideIndicator,
 		AnchorPoint = Vector2.new(0, 0.5),
@@ -2911,13 +3064,12 @@ function Library:CreateWindow(opts)
 	self.sideList = create("Frame", {
 		Parent = self.sideScroll,
 		Position = UDim2.fromOffset(8, 8),
-		Size = UDim2.new(1, -16, 0, 0),
+		Size = UDim2.fromOffset(SIDEBAR_W - 17, 0),
 		AutomaticSize = AUTO_Y,
 		BackgroundTransparency = 1,
 		ZIndex = 2,
 	})
 	vlist(self.sideList, TAB_GAP)
-	padding(self.sideList, 0, 8, 0, 0)
 
 	local function fade(parent, props, from, to)
 		local base = {
@@ -2971,12 +3123,11 @@ function Library:CreateWindow(opts)
 		ScrollBarThickness = 0,
 		ScrollingDirection = Enum.ScrollingDirection.X,
 		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = AUTO_X,
 	})
 
 	self.topList = create("Frame", {
 		Parent = self.topScroll,
-		Size = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.fromOffset(0, TOPBAR_H),
 		AutomaticSize = AUTO_X,
 		BackgroundTransparency = 1,
 		ZIndex = 2,
@@ -2986,7 +3137,7 @@ function Library:CreateWindow(opts)
 	self.topIndicator = self:_accent(create("Frame", {
 		Parent = self.topScroll,
 		AnchorPoint = Vector2.new(0, 1),
-		Position = UDim2.new(0, 14, 1, 0),
+		Position = UDim2.new(0, 14, 0, TOPBAR_H),
 		Size = UDim2.new(0, 40, 0, 2),
 		BorderSizePixel = 0,
 		Visible = false,
@@ -3048,6 +3199,15 @@ function Library:CreateWindow(opts)
 		Position = UDim2.fromOffset(SIDEBAR_W, HEADER_H),
 		Size = UDim2.new(1, -SIDEBAR_W, 1, -(HEADER_H + STATUS_H)),
 		BackgroundTransparency = 1,
+	})
+
+	self.pageFader = create("CanvasGroup", {
+		Parent = self.content,
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 2,
 	})
 
 	local statusBar = create("Frame", {
@@ -3122,10 +3282,13 @@ function Library:CreateWindow(opts)
 	local function refreshFades()
 		self:_updateFades()
 	end
+	local function refreshNav()
+		self:_syncNavCanvas()
+	end
 	self:_track(self.sideScroll:GetPropertyChangedSignal("CanvasPosition"):Connect(refreshFades))
-	self:_track(self.sideScroll:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(refreshFades))
 	self:_track(self.topScroll:GetPropertyChangedSignal("CanvasPosition"):Connect(refreshFades))
-	self:_track(self.topScroll:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(refreshFades))
+	self:_track(self.sideList:GetPropertyChangedSignal("AbsoluteSize"):Connect(refreshNav))
+	self:_track(self.topList:GetPropertyChangedSignal("AbsoluteSize"):Connect(refreshNav))
 
 	self:_track(UserInputService.InputBegan:Connect(function(input, processed)
 		if self.destroyed then
