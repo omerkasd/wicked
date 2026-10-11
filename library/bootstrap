@@ -2820,7 +2820,7 @@ function Library:CreateWindow(opts)
 	self.SubTitle = opts.SubTitle or ""
 	self.Layout = opts.Layout == "Topbar" and "Topbar" or "Sidebar"
 	self.Accent = opts.Accent or C.Accent
-	self.MenuKey = opts.MenuKey or Enum.KeyCode.RightShift
+	self.MenuKey = opts.MenuKey or Enum.KeyCode.RightControl
 	self.UserScale = opts.Scale or 1
 	self.StatusBar = opts.StatusBar ~= false
 	self.ConfigFolder = opts.ConfigFolder or "WickedSoftware"
@@ -3290,7 +3290,7 @@ function Library:CreateWindow(opts)
 	self:_track(self.sideList:GetPropertyChangedSignal("AbsoluteSize"):Connect(refreshNav))
 	self:_track(self.topList:GetPropertyChangedSignal("AbsoluteSize"):Connect(refreshNav))
 
-	self:_track(UserInputService.InputBegan:Connect(function(input, processed)
+	self:_track(UserInputService.InputBegan:Connect(function(input)
 		if self.destroyed then
 			return
 		end
@@ -3304,15 +3304,19 @@ function Library:CreateWindow(opts)
 			if input.UserInputType == Enum.UserInputType.Keyboard or isPress(input) then
 				local listener = Library._listener
 				Library._listener = nil
-				Library._consumed = input
+				Library._consumedKey = input.KeyCode
+				Library._consumedAt = os.clock()
 				listener(input)
 			end
 			return
 		end
-		if Library._consumed == input then
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then
 			return
 		end
-		if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then
+		if Library._consumedKey == input.KeyCode and os.clock() - (Library._consumedAt or 0) < 0.1 then
+			return
+		end
+		if UserInputService:GetFocusedTextBox() then
 			return
 		end
 		local key = input.KeyCode
