@@ -641,7 +641,7 @@ function Window:AddTab(opts)
 		ScrollBarImageColor3 = THEME.StrokeSoft,
 		ScrollBarImageTransparency = 0.2,
 		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		ClipsDescendants = true,
 	}, {
@@ -1172,7 +1172,7 @@ function Section:AddDropdown(opts)
 			ScrollBarThickness = 2,
 			ScrollBarImageColor3 = THEME.StrokeSoft,
 			CanvasSize = UDim2.new(),
-			AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
 			ClipsDescendants = true,
 		}, {
 			new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4) }),
@@ -1821,7 +1821,7 @@ function Library:CreateWindow(opts)
 		ScrollBarImageColor3 = THEME.StrokeSoft,
 		ScrollBarImageTransparency = 0.25,
 		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		ClipsDescendants = true,
 	}, {
@@ -1855,7 +1855,7 @@ function Library:CreateWindow(opts)
 		BorderSizePixel = 0,
 		ScrollBarThickness = 0,
 		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = Enum.AutomaticCanvasSize.X,
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
 		ScrollingDirection = Enum.ScrollingDirection.X,
 		ClipsDescendants = true,
 	}, {
