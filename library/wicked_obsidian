@@ -1,0 +1,400 @@
+local WICKED_URL = "https://raw.githubusercontent.com/YOUR/REPO/main/wicked_ui.lua"
+
+local env = (typeof(getgenv) == "function") and getgenv() or shared
+
+local Wicked = env.WickedUILibrary
+if type(Wicked) ~= "table" then
+	Wicked = loadstring(game:HttpGet(WICKED_URL))()
+	env.WickedUILibrary = Wicked
+end
+
+local store = {
+	Options = {},
+	Toggles = {},
+	Unloaded = false,
+	ForceCheckbox = false,
+	NotifyOnError = false,
+	ShowCustomCursor = false,
+	Wicked = Wicked,
+}
+
+local Library = {}
+local window
+local unloadHandlers = {}
+
+local function applyToggleKeybind(picker)
+	if not window or type(picker) ~= "table" then
+		return
+	end
+	if picker.Value ~= nil then
+		window:SetMenuKey(picker.Value)
+	end
+	if type(picker.OnChanged) == "function" then
+		picker:OnChanged(function(key)
+			window:SetMenuKey(key)
+		end)
+	end
+end
+
+setmetatable(Library, {
+	__index = store,
+	__newindex = function(_, key, value)
+		store[key] = value
+		if key == "ToggleKeybind" then
+			applyToggleKeybind(value)
+		end
+	end,
+})
+
+local function register(idx, obj, isToggle)
+	if idx == nil or type(obj) ~= "table" then
+		return obj
+	end
+	obj.Idx = idx
+	store.Options[idx] = obj
+	if isToggle then
+		store.Toggles[idx] = obj
+	end
+	return obj
+end
+
+local function toArray(value, values)
+	local out = {}
+	if type(value) ~= "table" then
+		return out
+	end
+	for i = 1, #values do
+		local option = values[i]
+		if value[option] == true then
+			out[#out + 1] = option
+		end
+	end
+	if #out == 0 then
+		for i = 1, #value do
+			local entry = value[i]
+			if type(entry) == "number" then
+				entry = values[entry]
+			end
+			if entry ~= nil then
+				out[#out + 1] = entry
+			end
+		end
+	end
+	return out
+end
+
+local function multiProxy(obj, values)
+	return setmetatable({}, {
+		__index = function(_, key)
+			if key == "Value" then
+				local set = {}
+				local arr = obj.Value
+				if type(arr) == "table" then
+					for i = 1, #arr do
+						set[arr[i]] = true
+					end
+				end
+				return set
+			end
+			local field = obj[key]
+			if type(field) ~= "function" then
+				return field
+			end
+			if key == "Set" or key == "SetValue" then
+				return function(_, value, ...)
+					return field(obj, toArray(value, values), ...)
+				end
+			end
+			return function(_, ...)
+				return field(obj, ...)
+			end
+		end,
+		__newindex = function(_, key, value)
+			obj[key] = value
+		end,
+	})
+end
+
+local Groupbox = {}
+Groupbox.__index = Groupbox
+
+local function wrapControl(box, obj, idx, isToggle)
+	register(idx, obj, isToggle)
+
+	function obj:AddColorPicker(pickerIdx, opts)
+		opts = opts or {}
+		local picker = box.section:AttachColorpicker(obj, {
+			Flag = pickerIdx,
+			Name = opts.Title or opts.Text,
+			Default = opts.Default,
+			Callback = opts.Callback,
+		})
+		register(pickerIdx, picker, false)
+		if opts.Title or opts.Text then
+			picker.Title = opts.Title or opts.Text
+		end
+		return obj
+	end
+
+	function obj:AddKeyPicker(pickerIdx, opts)
+		opts = opts or {}
+		local picker = box.section:AttachKeybind(obj, {
+			Flag = pickerIdx,
+			Name = opts.Text,
+			Default = opts.Default,
+			Mode = opts.Mode,
+			Callback = opts.Callback,
+			Changed = opts.ChangedCallback,
+		})
+		if opts.SyncToggleState ~= true then
+			picker.Parent = nil
+		end
+		register(pickerIdx, picker, false)
+		return obj
+	end
+
+	return obj
+end
+
+local function newGroupbox(section)
+	return setmetatable({ section = section }, Groupbox)
+end
+
+function Groupbox:AddToggle(idx, opts)
+	opts = opts or {}
+	local obj = self.section:AddToggle({
+		Flag = idx,
+		Name = opts.Text or idx,
+		Default = opts.Default,
+		Callback = opts.Callback,
+	})
+	return wrapControl(self, obj, idx, true)
+end
+
+function Groupbox:AddSlider(idx, opts)
+	opts = opts or {}
+	local rounding = tonumber(opts.Rounding) or 0
+	local obj = self.section:AddSlider({
+		Flag = idx,
+		Name = opts.Text or idx,
+		Default = opts.Default,
+		Min = opts.Min,
+		Max = opts.Max,
+		Decimals = rounding,
+		Increment = opts.Increment or (10 ^ -rounding),
+		Suffix = opts.Suffix,
+		Callback = opts.Callback,
+	})
+	return wrapControl(self, obj, idx, false)
+end
+
+function Groupbox:AddDropdown(idx, opts)
+	opts = opts or {}
+	local values = opts.Values or opts.Options or {}
+	local multi = opts.Multi == true
+
+	local default = opts.Default
+	if multi then
+		default = toArray(default, values)
+	elseif type(default) == "number" then
+		default = values[default]
+	end
+
+	local obj = self.section:AddDropdown({
+		Flag = idx,
+		Name = opts.Text or idx,
+		Options = values,
+		Default = default,
+		Multi = multi,
+		Search = opts.Searchable,
+		Callback = multi and function(selected)
+			if opts.Callback then
+				local set = {}
+				for i = 1, #selected do
+					set[selected[i]] = true
+				end
+				opts.Callback(set)
+			end
+		end or opts.Callback,
+	})
+
+	if not multi then
+		return wrapControl(self, obj, idx, false)
+	end
+
+	local proxy = multiProxy(obj, values)
+	wrapControl(self, obj, idx, false)
+	store.Options[idx] = proxy
+	return proxy
+end
+
+function Groupbox:AddInput(idx, opts)
+	opts = opts or {}
+	local obj = self.section:AddTextbox({
+		Flag = idx,
+		Name = opts.Text or idx,
+		Default = opts.Default,
+		Placeholder = opts.Placeholder,
+		Numeric = opts.Numeric,
+		EnterOnly = opts.Finished,
+		Callback = opts.Callback,
+	})
+	return wrapControl(self, obj, idx, false)
+end
+
+function Groupbox:AddLabel(content, _doesWrap)
+	local obj = self.section:AddLabel(content)
+	return wrapControl(self, obj, nil, false)
+end
+
+function Groupbox:AddDivider()
+	return self.section:AddDivider()
+end
+
+function Groupbox:AddButton(opts, legacyFunc)
+	if type(opts) == "string" then
+		opts = { Text = opts, Func = legacyFunc }
+	end
+	opts = opts or {}
+	local obj = self.section:AddButton({
+		Name = opts.Text,
+		Style = opts.Style,
+		Callback = opts.Func or opts.Callback,
+	})
+	return wrapControl(self, obj, nil, false)
+end
+
+function Groupbox:AddDependencyBox()
+	return newGroupbox(self.section:AddDependencyBox())
+end
+
+function Groupbox:SetupDependencies(list)
+	if type(self.section.SetupDependencies) == "function" then
+		self.section:SetupDependencies(list)
+	end
+	return self
+end
+
+function Groupbox:SetCollapsed(state)
+	if type(self.section.SetCollapsed) == "function" then
+		self.section:SetCollapsed(state)
+	end
+	return self
+end
+
+function Groupbox:Resize()
+	return self
+end
+
+local Tab = {}
+Tab.__index = Tab
+
+function Tab:AddGroupbox(opts, legacyIcon)
+	if type(opts) == "string" then
+		opts = { Name = opts, Icon = legacyIcon }
+	end
+	opts = opts or {}
+	return newGroupbox(self.tab:AddSection({
+		Name = opts.Name,
+		Column = opts.Side,
+		Collapsed = opts.Collapsed,
+	}))
+end
+
+function Tab:AddLeftGroupbox(name, icon)
+	return self:AddGroupbox({ Name = name, Side = 1, Icon = icon })
+end
+
+function Tab:AddRightGroupbox(name, icon)
+	return self:AddGroupbox({ Name = name, Side = 2, Icon = icon })
+end
+
+function Tab:AddLeftTabbox()
+	return self:AddGroupbox({ Name = "Tabs", Side = 1 })
+end
+
+function Tab:AddRightTabbox()
+	return self:AddGroupbox({ Name = "Tabs", Side = 2 })
+end
+
+local WindowWrap = {}
+WindowWrap.__index = WindowWrap
+
+function WindowWrap:AddTab(name, _icon)
+	return setmetatable({
+		tab = window:AddTab({ Name = name, Columns = 2 }),
+	}, Tab)
+end
+
+WindowWrap.AddKeyTab = WindowWrap.AddTab
+
+function Library:CreateWindow(opts)
+	opts = opts or {}
+	window = Wicked:CreateWindow({
+		Title = opts.Title,
+		SubTitle = opts.SubTitle,
+		Footer = opts.Footer,
+		MenuKey = Wicked.ToKey and Wicked.ToKey(opts.ToggleKeybind) or nil,
+	})
+	store.Window = window
+	Library.Window = window
+	return setmetatable({}, WindowWrap)
+end
+
+function Library:Notify(a, b)
+	local opts = a
+	if type(a) == "string" then
+		opts = { Title = a, Duration = b }
+	end
+	opts = opts or {}
+	if not window then
+		return
+	end
+	window:Notify({
+		Title = opts.Title,
+		Text = opts.Description or opts.Text or opts.Content,
+		Duration = opts.Time or opts.Duration,
+		Force = true,
+	})
+end
+
+function Library:UpdateDependencyBoxes()
+	if window then
+		window:UpdateDependencyBoxes()
+	end
+end
+
+function Library:OnUnload(fn)
+	if type(fn) == "function" then
+		unloadHandlers[#unloadHandlers + 1] = fn
+	end
+end
+
+function Library:Unload()
+	if store.Unloaded then
+		return
+	end
+	store.Unloaded = true
+	for i = 1, #unloadHandlers do
+		pcall(unloadHandlers[i])
+	end
+	if window then
+		window:Destroy()
+		window = nil
+	end
+	env.WickedUILibrary = nil
+end
+
+function Library:SetWatermark()
+end
+
+function Library:SetWatermarkVisibility()
+end
+
+function Library:Toggle(state)
+	if window then
+		window:Toggle(state)
+	end
+end
+
+return Library
